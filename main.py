@@ -5,7 +5,7 @@ import subprocess
 import re
 import tkinter as tk
 from tkinter import filedialog, messagebox
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageTk
 
 SETTINGS_FILE = "settings.json"
 
@@ -32,17 +32,19 @@ def apply_opacity(img, opacity):
 
 def sanitize_name(name):
     """Удаляет недопустимые символы для имен файлов и папок."""
-    # Вырезаем символы \ / : * ? " < > |
     return re.sub(r'[\\/:*?"<>|]', "", name)
 
 class WatermarkApp:
     def __init__(self, root):
         self.root = root
         self.root.title("Watermark Processor")
-        
         self.root.resizable(False, False)
         
         self.selected_files = []
+        
+        # Переменные для кэша миниатюр и Drag-and-Drop
+        self.thumbnails_cache = []
+        self.drag_data = {"tag": None, "x": 0, "index": -1}
         
         # --- Переменные настроек с загрузкой из файла ---
         default_out = os.path.join(os.getcwd(), "output_images")
@@ -56,17 +58,14 @@ class WatermarkApp:
         self.radius = tk.IntVar(value=self.load_setting("radius", 74))
         self.scale = tk.IntVar(value=self.load_setting("scale", 12))
         
-        # Загружаем состояние видимости редактора
         self.editor_visible = self.load_setting("editor_visible", False)
 
-        # Переменные для новых функций
         self.new_folder_name = tk.StringVar(value="new_folder")
         self.new_file_name = tk.StringVar(value="info.txt")
         
         self.setup_ui()
         self.setup_cyrillic_hotkeys()
 
-        # --- Применяем состояние окна после загрузки интерфейса ---
         if self.editor_visible:
             self.root.geometry("1040x720")
             self.btn_toggle_editor.config(text="СКРЫТЬ РЕДАКТОР", bg="#ffcccc")
@@ -95,7 +94,7 @@ class WatermarkApp:
             "opacity": self.opacity.get(),
             "radius": self.radius.get(),
             "scale": self.scale.get(),
-            "editor_visible": self.editor_visible  # Сохраняем состояние редактора
+            "editor_visible": self.editor_visible 
         }
         try:
             with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
@@ -107,16 +106,11 @@ class WatermarkApp:
         self.save_all_settings()
         self.root.destroy()
 
-   # --- Поддержка горячих клавиш для русской раскладки ---
     def setup_cyrillic_hotkeys(self):
         def handle_cyrillic_hotkeys(event):
             widget = event.widget
-            
             if isinstance(widget, (tk.Entry, tk.Text)):
                 keysym = event.keysym.lower()
-                
-                # Оставляем ТОЛЬКО кириллические символы. 
-                # Английские (a, c, v, x) Tkinter обрабатывает сам по умолчанию!
                 if keysym in ['cyrillic_ef', 'ф']: 
                     if isinstance(widget, tk.Text):
                         widget.tag_add("sel", "1.0", "end")
@@ -137,7 +131,6 @@ class WatermarkApp:
         self.root.bind('<Control-KeyPress>', handle_cyrillic_hotkeys)
 
     def toggle_editor(self):
-        """Разворачивает/сворачивает правую часть с редактором."""
         if self.editor_visible:
             self.root.geometry("520x720")
             self.btn_toggle_editor.config(text="ПОКАЗАТЬ РЕДАКТОР", bg="#e0e0e0")
@@ -148,7 +141,6 @@ class WatermarkApp:
             self.editor_visible = True
 
     def setup_ui(self):
-        # --- РАЗДЕЛЕНИЕ НА ЛЕВУЮ И ПРАВУЮ ЧАСТИ ---
         self.left_frame = tk.Frame(self.root, width=520, height=720)
         self.left_frame.pack_propagate(False) 
         self.left_frame.pack(side="left", fill="y")
@@ -157,61 +149,69 @@ class WatermarkApp:
         self.right_frame.pack_propagate(False)
         self.right_frame.pack(side="left", fill="both", expand=True)
 
-        # ==========================================
-        # ЗАПОЛНЯЕМ ЛЕВУЮ ЧАСТЬ (ОСНОВНАЯ ПРОГРАММА)
-        # ==========================================
-
         # --- 1. Исходные файлы ---
         frame_files = tk.LabelFrame(self.left_frame, text=" 1. Исходные фото ", padx=10, pady=5)
         frame_files.pack(fill="x", padx=10, pady=5)
 
-        self.lbl_files = tk.Label(frame_files, text="Выбрано файлов: 0")
+        # Под-фрейм для кнопок
+        files_btn_frame = tk.Frame(frame_files)
+        files_btn_frame.pack(fill="x", pady=(0, 5))
+
+        self.lbl_files = tk.Label(files_btn_frame, text="Выбрано файлов: 0")
         self.lbl_files.pack(side="left")
 
-        tk.Button(frame_files, text="Сбросить", command=self.clear_files).pack(side="right", padx=(5, 0))
-        tk.Button(frame_files, text="Выбрать фото", command=self.select_files).pack(side="right")
+        # Добавлена кнопка "Реверс"
+        tk.Button(files_btn_frame, text="Сбросить", command=self.clear_files).pack(side="right", padx=(5, 0))
+        tk.Button(files_btn_frame, text="Реверс", command=self.reverse_files).pack(side="right", padx=(5, 0))
+        tk.Button(files_btn_frame, text="Выбрать фото", command=self.select_files).pack(side="right")
+
+        # Под-фрейм для галереи Drag & Drop
+        self.thumb_canvas_frame = tk.Frame(frame_files)
+        self.thumb_canvas_frame.pack(fill="x")
+
+        self.thumb_canvas = tk.Canvas(self.thumb_canvas_frame, height=80, bg="#f5f5f5", highlightthickness=0)
+        self.thumb_canvas.pack(side="top", fill="x")
+
+        self.scrollbar = tk.Scrollbar(self.thumb_canvas_frame, orient="horizontal", command=self.thumb_canvas.xview)
+        self.scrollbar.pack(side="bottom", fill="x")
+        self.thumb_canvas.configure(xscrollcommand=self.scrollbar.set)
+
+        self.thumb_canvas.bind("<ButtonPress-1>", self.on_drag_start)
+        self.thumb_canvas.bind("<B1-Motion>", self.on_drag_motion)
+        self.thumb_canvas.bind("<ButtonRelease-1>", self.on_drag_release)
 
         # --- 2. Логотип ---
         frame_logo = tk.LabelFrame(self.left_frame, text=" 2. Файл логотипа ", padx=10, pady=5)
         frame_logo.pack(fill="x", padx=10, pady=5)
-
         tk.Entry(frame_logo, textvariable=self.logo_file, state="readonly").pack(side="left", fill="x", expand=True, padx=(0, 10))
         tk.Button(frame_logo, text="Выбрать лого", command=self.choose_logo_file).pack(side="right")
 
         # --- 3. Папка сохранения ---
         frame_output = tk.LabelFrame(self.left_frame, text=" 3. Папка сохранения ", padx=10, pady=5)
         frame_output.pack(fill="x", padx=10, pady=5)
-
         tk.Entry(frame_output, textvariable=self.output_folder, state="readonly").pack(side="left", fill="x", expand=True, padx=(0, 10))
-        
         tk.Button(frame_output, text="Открыть", command=self.open_output_folder).pack(side="right")
         tk.Button(frame_output, text="Изменить", command=self.choose_output_folder).pack(side="right", padx=(0, 5))
 
         # --- 4. Ползунки настроек ---
         frame_settings = tk.LabelFrame(self.left_frame, text=" 4. Настройки наложения ", padx=10, pady=10)
         frame_settings.pack(fill="x", padx=10, pady=5)
-
         frame_settings.columnconfigure(1, weight=1)
 
         tk.Label(frame_settings, text="Размер логотипа (%):").grid(row=0, column=0, sticky="e", pady=2)
         tk.Scale(frame_settings, variable=self.scale, from_=1, to=100, orient="horizontal").grid(row=0, column=1, sticky="we", padx=5)
-
         tk.Label(frame_settings, text="Отступ справа (px):").grid(row=1, column=0, sticky="e", pady=2)
         tk.Scale(frame_settings, variable=self.pad_x, from_=0, to=500, orient="horizontal").grid(row=1, column=1, sticky="we", padx=5)
-
         tk.Label(frame_settings, text="Отступ снизу (px):").grid(row=2, column=0, sticky="e", pady=2)
         tk.Scale(frame_settings, variable=self.pad_y, from_=0, to=500, orient="horizontal").grid(row=2, column=1, sticky="we", padx=5)
-
         tk.Label(frame_settings, text="Непрозрачность (%):").grid(row=3, column=0, sticky="e", pady=2)
         tk.Scale(frame_settings, variable=self.opacity, from_=0, to=100, orient="horizontal").grid(row=3, column=1, sticky="we", padx=5)
-
         tk.Label(frame_settings, text="Сила скругления (%):").grid(row=4, column=0, sticky="e", pady=2)
         tk.Scale(frame_settings, variable=self.radius, from_=0, to=100, orient="horizontal").grid(row=4, column=1, sticky="we", padx=5)
 
         # --- 5. Дополнительные инструменты ---
         frame_tools = tk.LabelFrame(self.left_frame, text=" 5. Дополнительные инструменты ", padx=10, pady=5)
         frame_tools.pack(fill="x", padx=10, pady=5)
-        
         frame_tools.columnconfigure(1, weight=1)
 
         tk.Label(frame_tools, text="Имя папки:").grid(row=0, column=0, sticky="w", pady=2)
@@ -232,13 +232,9 @@ class WatermarkApp:
         self.lbl_status = tk.Label(self.left_frame, text="Готов к работе", fg="#555555", font=("Arial", 10))
         self.lbl_status.pack()
 
-
-        # ==========================================
-        # ЗАПОЛНЯЕМ ПРАВУЮ ЧАСТЬ (ТЕКСТОВЫЙ РЕДАКТОР)
-        # ==========================================
+        # --- Текстовый редактор (Правая часть) ---
         lbl_editor_title = tk.Label(self.right_frame, text="Текстовый редактор", font=("Arial", 12, "bold"), fg="#333333")
         lbl_editor_title.pack(pady=(15, 5))
-        
         lbl_editor_hint = tk.Label(self.right_frame, text="Текст отсюда будет сохранен в ваш .txt файл", font=("Arial", 9), fg="#666666")
         lbl_editor_hint.pack(pady=(0, 10))
 
@@ -252,66 +248,106 @@ class WatermarkApp:
         self.text_editor.pack(side="left", fill="both", expand=True)
         text_scroll.config(command=self.text_editor.yview)
 
+    # --- DRAG AND DROP ЛОГИКА ---
+    def render_thumbnails(self):
+        self.thumb_canvas.delete("all")
+        self.thumbnails_cache = []
+        
+        for i, filepath in enumerate(self.selected_files):
+            try:
+                img = Image.open(filepath).convert("RGBA")
+                img.thumbnail((70, 70))
+                photo = ImageTk.PhotoImage(img)
+                self.thumbnails_cache.append(photo)
+                
+                x_base = 10 + i * 80
+                
+                self.thumb_canvas.create_rectangle(
+                    x_base, 5, x_base + 70, 75, 
+                    fill="#f5f5f5", outline="", tags=("draggable", f"index_{i}")
+                )
+                self.thumb_canvas.create_image(
+                    x_base + 35, 40, image=photo, anchor="center", 
+                    tags=("draggable", f"index_{i}")
+                )
+                self.thumb_canvas.create_rectangle(
+                    x_base, 5, x_base + 20, 25, 
+                    fill="black", tags=("draggable", f"index_{i}")
+                )
+                self.thumb_canvas.create_text(
+                    x_base + 10, 15, text=str(i+1), 
+                    fill="white", font=("Arial", 8, "bold"), 
+                    tags=("draggable", f"index_{i}")
+                )
+            except Exception as e:
+                print(f"Ошибка загрузки миниатюры {filepath}: {e}")
+                
+        total_width = 10 + len(self.selected_files) * 80
+        self.thumb_canvas.configure(scrollregion=(0, 0, total_width, 80))
+
+    def on_drag_start(self, event):
+        item = self.thumb_canvas.find_withtag("current")
+        if not item: return
+        tags = self.thumb_canvas.gettags(item[0])
+        index_tag = next((t for t in tags if t.startswith("index_")), None)
+        
+        if index_tag:
+            self.drag_data["index"] = int(index_tag.split("_")[1])
+            self.drag_data["tag"] = index_tag
+            self.drag_data["x"] = event.x
+            self.thumb_canvas.tag_raise(index_tag)
+
+    def on_drag_motion(self, event):
+        if self.drag_data["index"] != -1:
+            dx = event.x - self.drag_data["x"]
+            self.thumb_canvas.move(self.drag_data["tag"], dx, 0)
+            self.drag_data["x"] = event.x
+
+    def on_drag_release(self, event):
+        if self.drag_data["index"] != -1:
+            cx = self.thumb_canvas.canvasx(event.x)
+            new_index = int(cx // 80)
+            new_index = max(0, min(len(self.selected_files) - 1, new_index))
+            
+            old_index = self.drag_data["index"]
+            if old_index != new_index:
+                item = self.selected_files.pop(old_index)
+                self.selected_files.insert(new_index, item)
+            
+            self.drag_data["index"] = -1
+            self.render_thumbnails()
+
     # --- Функции для папок и файлов ---
     def create_custom_folder(self):
         base_dir = self.output_folder.get()
         raw_folder_name = self.new_folder_name.get().strip()
-        
-        if not raw_folder_name:
-            self.lbl_status.config(text="Укажите имя папки перед созданием", fg="#d32f2f")
-            return
-            
-        # Очищаем имя от недопустимых символов
+        if not raw_folder_name: return
         folder_name = sanitize_name(raw_folder_name).strip()
-        
-        if not folder_name:
-            self.lbl_status.config(text="Имя папки содержит только недопустимые символы", fg="#d32f2f")
-            return
-            
-        # Обновляем поле ввода очищенным текстом
+        if not folder_name: return
         self.new_folder_name.set(folder_name)
-            
         new_dir_path = os.path.join(base_dir, folder_name)
-        
         try:
             os.makedirs(new_dir_path, exist_ok=True)
             self.lbl_status.config(text=f"Папка '{folder_name}' успешно создана", fg="#388e3c")
         except Exception as e:
-            # Выводим ошибку тихо в статус, без всплывающих окон
             self.lbl_status.config(text=f"Ошибка: Не удалось создать папку ({e})", fg="#d32f2f")
 
     def create_custom_file(self):
         base_dir = self.output_folder.get()
         raw_file_name = self.new_file_name.get().strip()
-        
         file_content = self.text_editor.get("1.0", tk.END).rstrip('\n') 
-        
-        if not raw_file_name:
-            self.lbl_status.config(text="Укажите имя файла перед созданием", fg="#d32f2f")
-            return
-            
-        # Очищаем имя от недопустимых символов
+        if not raw_file_name: return
         file_name = sanitize_name(raw_file_name).strip()
-        
-        if not file_name:
-            self.lbl_status.config(text="Имя файла содержит только недопустимые символы", fg="#d32f2f")
-            return
-            
-        if not file_name.lower().endswith(".txt"):
-            file_name += ".txt"
-            
-        # Обновляем поле ввода очищенным текстом
+        if not file_name: return
+        if not file_name.lower().endswith(".txt"): file_name += ".txt"
         self.new_file_name.set(file_name) 
-            
         try:
             os.makedirs(base_dir, exist_ok=True) 
             new_file_path = os.path.join(base_dir, file_name)
-            
             with open(new_file_path, "w", encoding="utf-8") as f:
                 f.write(file_content) 
             self.lbl_status.config(text=f"Файл '{file_name}' успешно сохранен", fg="#388e3c")
         except Exception as e:
-            # Выводим ошибку тихо в статус, без всплывающих окон
             self.lbl_status.config(text=f"Ошибка: Не удалось сохранить файл ({e})", fg="#d32f2f")
 
     # --- Обработчики кнопок ---
@@ -321,14 +357,24 @@ class WatermarkApp:
             filetypes=[("Images", "*.jpg *.jpeg *.png *.webp")]
         )
         if files:
-            self.selected_files.extend(files)
-            self.selected_files = sorted(list(set(self.selected_files)))
+            for f in files:
+                if f not in self.selected_files:
+                    self.selected_files.append(f)
             self.update_file_label()
+            self.render_thumbnails()
             self.lbl_status.config(text=f"Добавлены файлы. Всего: {len(self.selected_files)}", fg="#555555")
+
+    # НОВАЯ ФУНКЦИЯ ДЛЯ КНОПКИ РЕВЕРСА
+    def reverse_files(self):
+        if self.selected_files:
+            self.selected_files.reverse()
+            self.render_thumbnails()
+            self.lbl_status.config(text="Порядок файлов изменен на обратный", fg="#555555")
 
     def clear_files(self):
         self.selected_files = []
         self.update_file_label()
+        self.render_thumbnails()
         self.lbl_status.config(text="Список файлов очищен", fg="#555555")
 
     def update_file_label(self):
@@ -339,27 +385,21 @@ class WatermarkApp:
             title="Выберите файл логотипа",
             filetypes=[("Images", "*.png *.jpg *.jpeg *.webp")]
         )
-        if file:
-            self.logo_file.set(file)
+        if file: self.logo_file.set(file)
 
     def choose_output_folder(self):
         folder = filedialog.askdirectory(title="Выберите папку для сохранения")
-        if folder:
-            self.output_folder.set(folder)
+        if folder: self.output_folder.set(folder)
 
     def open_output_folder(self):
         path = self.output_folder.get()
         if not os.path.exists(path):
             self.lbl_status.config(text="Папка будет создана автоматически при сохранении", fg="#d32f2f")
             return
-            
         try:
-            if sys.platform == "win32":
-                os.startfile(path)
-            elif sys.platform == "darwin": 
-                subprocess.call(["open", path])
-            else: 
-                subprocess.call(["xdg-open", path])
+            if sys.platform == "win32": os.startfile(path)
+            elif sys.platform == "darwin": subprocess.call(["open", path])
+            else: subprocess.call(["xdg-open", path])
         except Exception as e:
             messagebox.showerror("Ошибка", f"Не удалось открыть папку: {e}")
 
@@ -368,14 +408,12 @@ class WatermarkApp:
         if not self.selected_files:
             self.lbl_status.config(text="Сначала выберите фотографии для обработки", fg="#d32f2f")
             return
-
         logo_path = self.logo_file.get()
         if not logo_path or not os.path.exists(logo_path):
             self.lbl_status.config(text="Укажите правильный путь к логотипу", fg="#d32f2f")
             return
 
         self.save_all_settings()
-
         out_dir = self.output_folder.get()
         os.makedirs(out_dir, exist_ok=True)
 
@@ -411,7 +449,6 @@ class WatermarkApp:
 
                 if radius_val > 0:
                     wm = make_rounded_corners(wm, radius_val)
-                
                 if opacity_val < 1.0:
                     wm = apply_opacity(wm, opacity_val)
 
@@ -431,7 +468,6 @@ class WatermarkApp:
 
         self.btn_start.config(state="normal")
         self.clear_files()
-        
         self.lbl_status.config(text=f"Завершено! Успешно сохранено файлов: {counter - 1}", fg="#388e3c")
 
 if __name__ == "__main__":
