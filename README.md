@@ -1,3 +1,3 @@
 # Python-GUI-Watermark-Script
 Python GUI Watermark Script on images
-<img width="630" height="822" alt="gui" src="https://github.com/user-attachments/assets/49eeed67-0fdf-4aca-976e-ead783741e35" />
+<img width="645" height="930" alt="image" src="https://github.com/user-attachments/assets/88148ba4-aaa7-4b4b-bb61-515e79e487c3" />
