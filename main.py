@@ -33,7 +33,7 @@ class WatermarkApp:
     def __init__(self, root):
         self.root = root
         self.root.title("Watermark Processor")
-        self.root.geometry("520x620") # Чуть расширил окно для новой кнопки
+        self.root.geometry("520x720")
         self.root.resizable(False, False)
         
         self.selected_files = []
@@ -49,8 +49,13 @@ class WatermarkApp:
         self.opacity = tk.IntVar(value=self.load_setting("opacity", 90))
         self.radius = tk.IntVar(value=self.load_setting("radius", 74))
         self.scale = tk.IntVar(value=self.load_setting("scale", 12))
+
+        # Переменные для новых функций
+        self.new_folder_name = tk.StringVar(value="new_folder")
+        self.new_file_name = tk.StringVar(value="info.txt")
         
         self.setup_ui()
+        self.setup_cyrillic_hotkeys() # <--- Вызов фикса для русской раскладки
 
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
 
@@ -84,6 +89,33 @@ class WatermarkApp:
         self.save_all_settings()
         self.root.destroy()
 
+   # --- НОВОЕ: Поддержка горячих клавиш для русской раскладки ---
+    def setup_cyrillic_hotkeys(self):
+        def handle_cyrillic_hotkeys(event):
+            widget = event.widget
+            
+            # Применяем только если курсор находится в поле ввода (Entry)
+            if isinstance(widget, tk.Entry):
+                keysym = event.keysym.lower()
+                
+                # Проверяем системные имена клавиш в Tkinter или сами символы
+                if keysym in ['cyrillic_ef', 'ф', 'a']: # Ctrl + A / Ф
+                    widget.select_range(0, tk.END)
+                    widget.icursor(tk.END)
+                    return "break"
+                elif keysym in ['cyrillic_es', 'с', 'c']: # Ctrl + C / С
+                    widget.event_generate("<<Copy>>")
+                    return "break"
+                elif keysym in ['cyrillic_em', 'м', 'v']: # Ctrl + V / М
+                    widget.event_generate("<<Paste>>")
+                    return "break"
+                elif keysym in ['cyrillic_che', 'ч', 'x']: # Ctrl + X / Ч
+                    widget.event_generate("<<Cut>>")
+                    return "break"
+
+        # Слушаем ВСЕ нажатия с зажатым Ctrl на уровне окна
+        self.root.bind('<Control-KeyPress>', handle_cyrillic_hotkeys)
+
     def setup_ui(self):
         # --- 1. Исходные файлы ---
         frame_files = tk.LabelFrame(self.root, text=" 1. Исходные фото ", padx=10, pady=5)
@@ -108,7 +140,6 @@ class WatermarkApp:
 
         tk.Entry(frame_output, textvariable=self.output_folder, state="readonly").pack(side="left", fill="x", expand=True, padx=(0, 10))
         
-        # ДОБАВЛЕНА НОВАЯ КНОПКА ОТКРЫТИЯ ПАПКИ
         tk.Button(frame_output, text="Открыть", command=self.open_output_folder).pack(side="right")
         tk.Button(frame_output, text="Изменить", command=self.choose_output_folder).pack(side="right", padx=(0, 5))
 
@@ -133,12 +164,67 @@ class WatermarkApp:
         tk.Label(frame_settings, text="Сила скругления (%):").grid(row=4, column=0, sticky="e", pady=2)
         tk.Scale(frame_settings, variable=self.radius, from_=0, to=100, orient="horizontal").grid(row=4, column=1, sticky="we", padx=5)
 
+        # --- 5. Дополнительные инструменты ---
+        frame_tools = tk.LabelFrame(self.root, text=" 5. Дополнительные инструменты (в папке сохранения) ", padx=10, pady=5)
+        frame_tools.pack(fill="x", padx=10, pady=5)
+        
+        frame_tools.columnconfigure(1, weight=1)
+
+        # Поле и кнопка для создания папки
+        tk.Label(frame_tools, text="Имя папки:").grid(row=0, column=0, sticky="w", pady=2)
+        tk.Entry(frame_tools, textvariable=self.new_folder_name).grid(row=0, column=1, sticky="we", padx=5, pady=2)
+        tk.Button(frame_tools, text="Создать папку", command=self.create_custom_folder, width=15).grid(row=0, column=2, pady=2)
+
+        # Поле и кнопка для создания файла
+        tk.Label(frame_tools, text="Имя файла:").grid(row=1, column=0, sticky="w", pady=2)
+        tk.Entry(frame_tools, textvariable=self.new_file_name).grid(row=1, column=1, sticky="we", padx=5, pady=2)
+        tk.Button(frame_tools, text="Создать .txt", command=self.create_custom_file, width=15).grid(row=1, column=2, pady=2)
+
         # --- Кнопка старта ---
         self.btn_start = tk.Button(self.root, text="Начать обработку", font=("Arial", 12, "bold"), bg="#4CAF50", fg="white", command=self.process_images)
-        self.btn_start.pack(fill="x", padx=10, pady=(15, 5), ipady=10)
+        self.btn_start.pack(fill="x", padx=10, pady=(10, 5), ipady=10)
 
-        self.lbl_status = tk.Label(self.root, text="Готов к работе", fg="gray")
+        self.lbl_status = tk.Label(self.root, text="Готов к работе", fg="#555555", font=("Arial", 10))
         self.lbl_status.pack()
+
+    # --- Функции для папок и файлов ---
+    def create_custom_folder(self):
+        base_dir = self.output_folder.get()
+        folder_name = self.new_folder_name.get().strip()
+        
+        if not folder_name:
+            self.lbl_status.config(text="Укажите имя папки перед созданием", fg="#d32f2f")
+            return
+            
+        new_dir_path = os.path.join(base_dir, folder_name)
+        
+        try:
+            os.makedirs(new_dir_path, exist_ok=True)
+            self.lbl_status.config(text=f"Папка '{folder_name}' успешно создана", fg="#388e3c")
+        except Exception as e:
+            messagebox.showerror("Ошибка", f"Не удалось создать папку:\n{e}")
+
+    def create_custom_file(self):
+        base_dir = self.output_folder.get()
+        file_name = self.new_file_name.get().strip()
+        
+        if not file_name:
+            self.lbl_status.config(text="Укажите имя файла перед созданием", fg="#d32f2f")
+            return
+            
+        if not file_name.lower().endswith(".txt"):
+            file_name += ".txt"
+            self.new_file_name.set(file_name) 
+            
+        os.makedirs(base_dir, exist_ok=True) 
+        new_file_path = os.path.join(base_dir, file_name)
+        
+        try:
+            with open(new_file_path, "w", encoding="utf-8") as f:
+                f.write("") 
+            self.lbl_status.config(text=f"Файл '{file_name}' успешно создан", fg="#388e3c")
+        except Exception as e:
+            messagebox.showerror("Ошибка", f"Не удалось создать файл:\n{e}")
 
     # --- Обработчики кнопок ---
     def select_files(self):
@@ -150,10 +236,12 @@ class WatermarkApp:
             self.selected_files.extend(files)
             self.selected_files = sorted(list(set(self.selected_files)))
             self.update_file_label()
+            self.lbl_status.config(text=f"Добавлены файлы. Всего: {len(self.selected_files)}", fg="#555555")
 
     def clear_files(self):
         self.selected_files = []
         self.update_file_label()
+        self.lbl_status.config(text="Список файлов очищен", fg="#555555")
 
     def update_file_label(self):
         self.lbl_files.config(text=f"Выбрано файлов: {len(self.selected_files)}")
@@ -171,19 +259,18 @@ class WatermarkApp:
         if folder:
             self.output_folder.set(folder)
 
-    # ДОБАВЛЕНА ФУНКЦИЯ ДЛЯ ОТКРЫТИЯ ПАПКИ
     def open_output_folder(self):
         path = self.output_folder.get()
         if not os.path.exists(path):
-            messagebox.showwarning("Внимание", "Эта папка еще не существует. Она будет создана при обработке фото.")
+            self.lbl_status.config(text="Папка будет создана автоматически при сохранении", fg="#d32f2f")
             return
             
         try:
             if sys.platform == "win32":
                 os.startfile(path)
-            elif sys.platform == "darwin": # macOS
+            elif sys.platform == "darwin": 
                 subprocess.call(["open", path])
-            else: # Linux
+            else: 
                 subprocess.call(["xdg-open", path])
         except Exception as e:
             messagebox.showerror("Ошибка", f"Не удалось открыть папку: {e}")
@@ -191,12 +278,12 @@ class WatermarkApp:
     # --- Основной процесс ---
     def process_images(self):
         if not self.selected_files:
-            messagebox.showwarning("Внимание", "Сначала выберите фотографии для обработки!")
+            self.lbl_status.config(text="Сначала выберите фотографии для обработки", fg="#d32f2f")
             return
 
         logo_path = self.logo_file.get()
         if not logo_path or not os.path.exists(logo_path):
-            messagebox.showerror("Ошибка", "Пожалуйста, укажите правильный путь к файлу логотипа!")
+            self.lbl_status.config(text="Укажите правильный путь к логотипу", fg="#d32f2f")
             return
 
         self.save_all_settings()
@@ -222,7 +309,7 @@ class WatermarkApp:
 
         for filepath in self.selected_files:
             try:
-                self.lbl_status.config(text=f"Обработка {counter} из {total}...")
+                self.lbl_status.config(text=f"Обработка: {counter} из {total}...", fg="#555555")
                 self.root.update()
 
                 img = Image.open(filepath).convert("RGBA")
@@ -255,9 +342,10 @@ class WatermarkApp:
                 print(f"Ошибка с файлом {filepath}: {e}")
 
         self.btn_start.config(state="normal")
-        self.lbl_status.config(text="Обработка завершена!")
         self.clear_files()
-        messagebox.showinfo("Успех", f"Успешно обработано файлов: {counter - 1}\nОни сохранены в:\n{out_dir}")
+        
+        # Ненавязчивое сообщение об успехе в статус-баре
+        self.lbl_status.config(text=f"Завершено! Успешно сохранено файлов: {counter - 1}", fg="#388e3c")
 
 if __name__ == "__main__":
     root = tk.Tk()
