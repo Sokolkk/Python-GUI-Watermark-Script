@@ -2,6 +2,7 @@ import os
 import sys
 import json
 import subprocess
+import re
 import tkinter as tk
 from tkinter import filedialog, messagebox
 from PIL import Image, ImageDraw
@@ -28,6 +29,11 @@ def apply_opacity(img, opacity):
     alpha = alpha.point(lambda p: int(p * opacity))
     img.putalpha(alpha)
     return img
+
+def sanitize_name(name):
+    """Удаляет недопустимые символы для имен файлов и папок."""
+    # Вырезаем символы \ / : * ? " < > |
+    return re.sub(r'[\\/:*?"<>|]', "", name)
 
 class WatermarkApp:
     def __init__(self, root):
@@ -100,20 +106,22 @@ class WatermarkApp:
             if isinstance(widget, (tk.Entry, tk.Text)):
                 keysym = event.keysym.lower()
                 
-                if keysym in ['cyrillic_ef', 'ф', 'a']: 
+                # Оставляем ТОЛЬКО кириллические символы. 
+                # Английские (a, c, v, x) Tkinter обрабатывает сам по умолчанию!
+                if keysym in ['cyrillic_ef', 'ф']: 
                     if isinstance(widget, tk.Text):
                         widget.tag_add("sel", "1.0", "end")
                     else:
                         widget.select_range(0, tk.END)
                         widget.icursor(tk.END)
                     return "break"
-                elif keysym in ['cyrillic_es', 'с', 'c']: 
+                elif keysym in ['cyrillic_es', 'с']: 
                     widget.event_generate("<<Copy>>")
                     return "break"
-                elif keysym in ['cyrillic_em', 'м', 'v']: 
+                elif keysym in ['cyrillic_em', 'м']: 
                     widget.event_generate("<<Paste>>")
                     return "break"
-                elif keysym in ['cyrillic_che', 'ч', 'x']: 
+                elif keysym in ['cyrillic_che', 'ч']: 
                     widget.event_generate("<<Cut>>")
                     return "break"
 
@@ -132,13 +140,10 @@ class WatermarkApp:
 
     def setup_ui(self):
         # --- РАЗДЕЛЕНИЕ НА ЛЕВУЮ И ПРАВУЮ ЧАСТИ ---
-        
-        # Левая часть (520 пикселей, фиксированная)
         self.left_frame = tk.Frame(self.root, width=520, height=720)
-        self.left_frame.pack_propagate(False) # Запрещаем рамке сжиматься
+        self.left_frame.pack_propagate(False) 
         self.left_frame.pack(side="left", fill="y")
 
-        # Правая часть (520 пикселей, появляется при расширении окна)
         self.right_frame = tk.Frame(self.root, width=520, height=720)
         self.right_frame.pack_propagate(False)
         self.right_frame.pack(side="left", fill="both", expand=True)
@@ -200,18 +205,14 @@ class WatermarkApp:
         
         frame_tools.columnconfigure(1, weight=1)
 
-        # Создание папки
         tk.Label(frame_tools, text="Имя папки:").grid(row=0, column=0, sticky="w", pady=2)
         tk.Entry(frame_tools, textvariable=self.new_folder_name).grid(row=0, column=1, sticky="we", padx=5, pady=2)
         tk.Button(frame_tools, text="Создать папку", command=self.create_custom_folder, width=15).grid(row=0, column=2, columnspan=2, pady=2, sticky="we")
 
-        # Создание файла + Кнопка выдвижного редактора
         tk.Label(frame_tools, text="Имя файла:").grid(row=1, column=0, sticky="w", pady=2)
         tk.Entry(frame_tools, textvariable=self.new_file_name).grid(row=1, column=1, sticky="we", padx=5, pady=2)
-        
         tk.Button(frame_tools, text="Сохранить файл", command=self.create_custom_file).grid(row=1, column=2, pady=2, padx=(0, 5))
         
-        # Сама кнопка выдвижения
         self.btn_toggle_editor = tk.Button(frame_tools, text="ПОКАЗАТЬ РЕДАКТОР", command=self.toggle_editor, bg="#e0e0e0", font=("Arial", 8, "bold"))
         self.btn_toggle_editor.grid(row=1, column=3, pady=2, sticky="we")
 
@@ -245,11 +246,21 @@ class WatermarkApp:
     # --- Функции для папок и файлов ---
     def create_custom_folder(self):
         base_dir = self.output_folder.get()
-        folder_name = self.new_folder_name.get().strip()
+        raw_folder_name = self.new_folder_name.get().strip()
         
-        if not folder_name:
+        if not raw_folder_name:
             self.lbl_status.config(text="Укажите имя папки перед созданием", fg="#d32f2f")
             return
+            
+        # Очищаем имя от недопустимых символов
+        folder_name = sanitize_name(raw_folder_name).strip()
+        
+        if not folder_name:
+            self.lbl_status.config(text="Имя папки содержит только недопустимые символы", fg="#d32f2f")
+            return
+            
+        # Обновляем поле ввода очищенным текстом
+        self.new_folder_name.set(folder_name)
             
         new_dir_path = os.path.join(base_dir, folder_name)
         
@@ -257,32 +268,42 @@ class WatermarkApp:
             os.makedirs(new_dir_path, exist_ok=True)
             self.lbl_status.config(text=f"Папка '{folder_name}' успешно создана", fg="#388e3c")
         except Exception as e:
-            messagebox.showerror("Ошибка", f"Не удалось создать папку:\n{e}")
+            # Выводим ошибку тихо в статус, без всплывающих окон
+            self.lbl_status.config(text=f"Ошибка: Не удалось создать папку ({e})", fg="#d32f2f")
 
     def create_custom_file(self):
         base_dir = self.output_folder.get()
-        file_name = self.new_file_name.get().strip()
+        raw_file_name = self.new_file_name.get().strip()
         
-        # Получаем текст из редактора
         file_content = self.text_editor.get("1.0", tk.END).rstrip('\n') 
         
-        if not file_name:
+        if not raw_file_name:
             self.lbl_status.config(text="Укажите имя файла перед созданием", fg="#d32f2f")
+            return
+            
+        # Очищаем имя от недопустимых символов
+        file_name = sanitize_name(raw_file_name).strip()
+        
+        if not file_name:
+            self.lbl_status.config(text="Имя файла содержит только недопустимые символы", fg="#d32f2f")
             return
             
         if not file_name.lower().endswith(".txt"):
             file_name += ".txt"
-            self.new_file_name.set(file_name) 
             
-        os.makedirs(base_dir, exist_ok=True) 
-        new_file_path = os.path.join(base_dir, file_name)
-        
+        # Обновляем поле ввода очищенным текстом
+        self.new_file_name.set(file_name) 
+            
         try:
+            os.makedirs(base_dir, exist_ok=True) 
+            new_file_path = os.path.join(base_dir, file_name)
+            
             with open(new_file_path, "w", encoding="utf-8") as f:
                 f.write(file_content) 
             self.lbl_status.config(text=f"Файл '{file_name}' успешно сохранен", fg="#388e3c")
         except Exception as e:
-            messagebox.showerror("Ошибка", f"Не удалось создать файл:\n{e}")
+            # Выводим ошибку тихо в статус, без всплывающих окон
+            self.lbl_status.config(text=f"Ошибка: Не удалось сохранить файл ({e})", fg="#d32f2f")
 
     # --- Обработчики кнопок ---
     def select_files(self):
