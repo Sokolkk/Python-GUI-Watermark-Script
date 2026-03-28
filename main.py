@@ -40,12 +40,9 @@ class WatermarkApp:
         self.root = root
         self.root.title("Watermark Processor")
         
-        # Начальный размер: показываем только левую часть
-        self.root.geometry("520x720")
         self.root.resizable(False, False)
         
         self.selected_files = []
-        self.editor_visible = False # Флаг видимости редактора
         
         # --- Переменные настроек с загрузкой из файла ---
         default_out = os.path.join(os.getcwd(), "output_images")
@@ -58,6 +55,9 @@ class WatermarkApp:
         self.opacity = tk.IntVar(value=self.load_setting("opacity", 90))
         self.radius = tk.IntVar(value=self.load_setting("radius", 74))
         self.scale = tk.IntVar(value=self.load_setting("scale", 12))
+        
+        # Загружаем состояние видимости редактора
+        self.editor_visible = self.load_setting("editor_visible", False)
 
         # Переменные для новых функций
         self.new_folder_name = tk.StringVar(value="new_folder")
@@ -65,6 +65,14 @@ class WatermarkApp:
         
         self.setup_ui()
         self.setup_cyrillic_hotkeys()
+
+        # --- Применяем состояние окна после загрузки интерфейса ---
+        if self.editor_visible:
+            self.root.geometry("1040x720")
+            self.btn_toggle_editor.config(text="СКРЫТЬ РЕДАКТОР", bg="#ffcccc")
+        else:
+            self.root.geometry("520x720")
+            self.btn_toggle_editor.config(text="ПОКАЗАТЬ РЕДАКТОР", bg="#e0e0e0")
 
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
 
@@ -86,7 +94,8 @@ class WatermarkApp:
             "pad_y": self.pad_y.get(),
             "opacity": self.opacity.get(),
             "radius": self.radius.get(),
-            "scale": self.scale.get()
+            "scale": self.scale.get(),
+            "editor_visible": self.editor_visible  # Сохраняем состояние редактора
         }
         try:
             with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
