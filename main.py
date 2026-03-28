@@ -33,10 +33,13 @@ class WatermarkApp:
     def __init__(self, root):
         self.root = root
         self.root.title("Watermark Processor")
+        
+        # Начальный размер: показываем только левую часть
         self.root.geometry("520x720")
         self.root.resizable(False, False)
         
         self.selected_files = []
+        self.editor_visible = False # Флаг видимости редактора
         
         # --- Переменные настроек с загрузкой из файла ---
         default_out = os.path.join(os.getcwd(), "output_images")
@@ -55,7 +58,7 @@ class WatermarkApp:
         self.new_file_name = tk.StringVar(value="info.txt")
         
         self.setup_ui()
-        self.setup_cyrillic_hotkeys() # <--- Вызов фикса для русской раскладки
+        self.setup_cyrillic_hotkeys()
 
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
 
@@ -89,36 +92,63 @@ class WatermarkApp:
         self.save_all_settings()
         self.root.destroy()
 
-   # --- НОВОЕ: Поддержка горячих клавиш для русской раскладки ---
+   # --- Поддержка горячих клавиш для русской раскладки ---
     def setup_cyrillic_hotkeys(self):
         def handle_cyrillic_hotkeys(event):
             widget = event.widget
             
-            # Применяем только если курсор находится в поле ввода (Entry)
-            if isinstance(widget, tk.Entry):
+            if isinstance(widget, (tk.Entry, tk.Text)):
                 keysym = event.keysym.lower()
                 
-                # Проверяем системные имена клавиш в Tkinter или сами символы
-                if keysym in ['cyrillic_ef', 'ф', 'a']: # Ctrl + A / Ф
-                    widget.select_range(0, tk.END)
-                    widget.icursor(tk.END)
+                if keysym in ['cyrillic_ef', 'ф', 'a']: 
+                    if isinstance(widget, tk.Text):
+                        widget.tag_add("sel", "1.0", "end")
+                    else:
+                        widget.select_range(0, tk.END)
+                        widget.icursor(tk.END)
                     return "break"
-                elif keysym in ['cyrillic_es', 'с', 'c']: # Ctrl + C / С
+                elif keysym in ['cyrillic_es', 'с', 'c']: 
                     widget.event_generate("<<Copy>>")
                     return "break"
-                elif keysym in ['cyrillic_em', 'м', 'v']: # Ctrl + V / М
+                elif keysym in ['cyrillic_em', 'м', 'v']: 
                     widget.event_generate("<<Paste>>")
                     return "break"
-                elif keysym in ['cyrillic_che', 'ч', 'x']: # Ctrl + X / Ч
+                elif keysym in ['cyrillic_che', 'ч', 'x']: 
                     widget.event_generate("<<Cut>>")
                     return "break"
 
-        # Слушаем ВСЕ нажатия с зажатым Ctrl на уровне окна
         self.root.bind('<Control-KeyPress>', handle_cyrillic_hotkeys)
 
+    def toggle_editor(self):
+        """Разворачивает/сворачивает правую часть с редактором."""
+        if self.editor_visible:
+            self.root.geometry("520x720")
+            self.btn_toggle_editor.config(text="ПОКАЗАТЬ РЕДАКТОР", bg="#e0e0e0")
+            self.editor_visible = False
+        else:
+            self.root.geometry("1040x720")
+            self.btn_toggle_editor.config(text="СКРЫТЬ РЕДАКТОР", bg="#ffcccc")
+            self.editor_visible = True
+
     def setup_ui(self):
+        # --- РАЗДЕЛЕНИЕ НА ЛЕВУЮ И ПРАВУЮ ЧАСТИ ---
+        
+        # Левая часть (520 пикселей, фиксированная)
+        self.left_frame = tk.Frame(self.root, width=520, height=720)
+        self.left_frame.pack_propagate(False) # Запрещаем рамке сжиматься
+        self.left_frame.pack(side="left", fill="y")
+
+        # Правая часть (520 пикселей, появляется при расширении окна)
+        self.right_frame = tk.Frame(self.root, width=520, height=720)
+        self.right_frame.pack_propagate(False)
+        self.right_frame.pack(side="left", fill="both", expand=True)
+
+        # ==========================================
+        # ЗАПОЛНЯЕМ ЛЕВУЮ ЧАСТЬ (ОСНОВНАЯ ПРОГРАММА)
+        # ==========================================
+
         # --- 1. Исходные файлы ---
-        frame_files = tk.LabelFrame(self.root, text=" 1. Исходные фото ", padx=10, pady=5)
+        frame_files = tk.LabelFrame(self.left_frame, text=" 1. Исходные фото ", padx=10, pady=5)
         frame_files.pack(fill="x", padx=10, pady=5)
 
         self.lbl_files = tk.Label(frame_files, text="Выбрано файлов: 0")
@@ -128,14 +158,14 @@ class WatermarkApp:
         tk.Button(frame_files, text="Выбрать фото", command=self.select_files).pack(side="right")
 
         # --- 2. Логотип ---
-        frame_logo = tk.LabelFrame(self.root, text=" 2. Файл логотипа ", padx=10, pady=5)
+        frame_logo = tk.LabelFrame(self.left_frame, text=" 2. Файл логотипа ", padx=10, pady=5)
         frame_logo.pack(fill="x", padx=10, pady=5)
 
         tk.Entry(frame_logo, textvariable=self.logo_file, state="readonly").pack(side="left", fill="x", expand=True, padx=(0, 10))
         tk.Button(frame_logo, text="Выбрать лого", command=self.choose_logo_file).pack(side="right")
 
         # --- 3. Папка сохранения ---
-        frame_output = tk.LabelFrame(self.root, text=" 3. Папка сохранения ", padx=10, pady=5)
+        frame_output = tk.LabelFrame(self.left_frame, text=" 3. Папка сохранения ", padx=10, pady=5)
         frame_output.pack(fill="x", padx=10, pady=5)
 
         tk.Entry(frame_output, textvariable=self.output_folder, state="readonly").pack(side="left", fill="x", expand=True, padx=(0, 10))
@@ -144,7 +174,7 @@ class WatermarkApp:
         tk.Button(frame_output, text="Изменить", command=self.choose_output_folder).pack(side="right", padx=(0, 5))
 
         # --- 4. Ползунки настроек ---
-        frame_settings = tk.LabelFrame(self.root, text=" 4. Настройки наложения ", padx=10, pady=10)
+        frame_settings = tk.LabelFrame(self.left_frame, text=" 4. Настройки наложения ", padx=10, pady=10)
         frame_settings.pack(fill="x", padx=10, pady=5)
 
         frame_settings.columnconfigure(1, weight=1)
@@ -165,27 +195,52 @@ class WatermarkApp:
         tk.Scale(frame_settings, variable=self.radius, from_=0, to=100, orient="horizontal").grid(row=4, column=1, sticky="we", padx=5)
 
         # --- 5. Дополнительные инструменты ---
-        frame_tools = tk.LabelFrame(self.root, text=" 5. Дополнительные инструменты (в папке сохранения) ", padx=10, pady=5)
+        frame_tools = tk.LabelFrame(self.left_frame, text=" 5. Дополнительные инструменты ", padx=10, pady=5)
         frame_tools.pack(fill="x", padx=10, pady=5)
         
         frame_tools.columnconfigure(1, weight=1)
 
-        # Поле и кнопка для создания папки
+        # Создание папки
         tk.Label(frame_tools, text="Имя папки:").grid(row=0, column=0, sticky="w", pady=2)
         tk.Entry(frame_tools, textvariable=self.new_folder_name).grid(row=0, column=1, sticky="we", padx=5, pady=2)
-        tk.Button(frame_tools, text="Создать папку", command=self.create_custom_folder, width=15).grid(row=0, column=2, pady=2)
+        tk.Button(frame_tools, text="Создать папку", command=self.create_custom_folder, width=15).grid(row=0, column=2, columnspan=2, pady=2, sticky="we")
 
-        # Поле и кнопка для создания файла
+        # Создание файла + Кнопка выдвижного редактора
         tk.Label(frame_tools, text="Имя файла:").grid(row=1, column=0, sticky="w", pady=2)
         tk.Entry(frame_tools, textvariable=self.new_file_name).grid(row=1, column=1, sticky="we", padx=5, pady=2)
-        tk.Button(frame_tools, text="Создать .txt", command=self.create_custom_file, width=15).grid(row=1, column=2, pady=2)
+        
+        tk.Button(frame_tools, text="Сохранить файл", command=self.create_custom_file).grid(row=1, column=2, pady=2, padx=(0, 5))
+        
+        # Сама кнопка выдвижения
+        self.btn_toggle_editor = tk.Button(frame_tools, text="ПОКАЗАТЬ РЕДАКТОР", command=self.toggle_editor, bg="#e0e0e0", font=("Arial", 8, "bold"))
+        self.btn_toggle_editor.grid(row=1, column=3, pady=2, sticky="we")
 
         # --- Кнопка старта ---
-        self.btn_start = tk.Button(self.root, text="Начать обработку", font=("Arial", 12, "bold"), bg="#4CAF50", fg="white", command=self.process_images)
-        self.btn_start.pack(fill="x", padx=10, pady=(10, 5), ipady=10)
+        self.btn_start = tk.Button(self.left_frame, text="Начать обработку", font=("Arial", 12, "bold"), bg="#4CAF50", fg="white", command=self.process_images)
+        self.btn_start.pack(fill="x", padx=10, pady=(15, 5), ipady=10)
 
-        self.lbl_status = tk.Label(self.root, text="Готов к работе", fg="#555555", font=("Arial", 10))
+        self.lbl_status = tk.Label(self.left_frame, text="Готов к работе", fg="#555555", font=("Arial", 10))
         self.lbl_status.pack()
+
+
+        # ==========================================
+        # ЗАПОЛНЯЕМ ПРАВУЮ ЧАСТЬ (ТЕКСТОВЫЙ РЕДАКТОР)
+        # ==========================================
+        lbl_editor_title = tk.Label(self.right_frame, text="Текстовый редактор", font=("Arial", 12, "bold"), fg="#333333")
+        lbl_editor_title.pack(pady=(15, 5))
+        
+        lbl_editor_hint = tk.Label(self.right_frame, text="Текст отсюда будет сохранен в ваш .txt файл", font=("Arial", 9), fg="#666666")
+        lbl_editor_hint.pack(pady=(0, 10))
+
+        frame_text = tk.Frame(self.right_frame)
+        frame_text.pack(fill="both", expand=True, padx=15, pady=(0, 15))
+
+        text_scroll = tk.Scrollbar(frame_text)
+        text_scroll.pack(side="right", fill="y")
+
+        self.text_editor = tk.Text(frame_text, wrap="word", font=("Arial", 10), yscrollcommand=text_scroll.set)
+        self.text_editor.pack(side="left", fill="both", expand=True)
+        text_scroll.config(command=self.text_editor.yview)
 
     # --- Функции для папок и файлов ---
     def create_custom_folder(self):
@@ -208,6 +263,9 @@ class WatermarkApp:
         base_dir = self.output_folder.get()
         file_name = self.new_file_name.get().strip()
         
+        # Получаем текст из редактора
+        file_content = self.text_editor.get("1.0", tk.END).rstrip('\n') 
+        
         if not file_name:
             self.lbl_status.config(text="Укажите имя файла перед созданием", fg="#d32f2f")
             return
@@ -221,8 +279,8 @@ class WatermarkApp:
         
         try:
             with open(new_file_path, "w", encoding="utf-8") as f:
-                f.write("") 
-            self.lbl_status.config(text=f"Файл '{file_name}' успешно создан", fg="#388e3c")
+                f.write(file_content) 
+            self.lbl_status.config(text=f"Файл '{file_name}' успешно сохранен", fg="#388e3c")
         except Exception as e:
             messagebox.showerror("Ошибка", f"Не удалось создать файл:\n{e}")
 
@@ -344,7 +402,6 @@ class WatermarkApp:
         self.btn_start.config(state="normal")
         self.clear_files()
         
-        # Ненавязчивое сообщение об успехе в статус-баре
         self.lbl_status.config(text=f"Завершено! Успешно сохранено файлов: {counter - 1}", fg="#388e3c")
 
 if __name__ == "__main__":
